@@ -21,14 +21,20 @@
  *                                                                         *
  ***************************************************************************/
 """
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
+from qgis.PyQt.QtCore import Qt, QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
+import sys
+import requests
+from xml.etree import ElementTree
+from qgis.core import QgsVectorLayer, QgsProject, QgsRenderContext, QgsSimpleFillSymbolLayer, QgsSettings
+from qgis.PyQt.QtGui import QColor
+
 # Initialize Qt resources from file resources.py
 from .resources import *
-# Import the code for the dialog
-from .qisoval_dialog import qisovalDialog
+# Import the code for the dockwidget
+from .qisoval_dock import qIsovalDock
 import os.path
 
 
@@ -169,6 +175,101 @@ class qisoval:
 
         # will be set False in run()
         self.first_start = True
+        # Create the dialog with elements (after translation) and keep reference
+        # Only create GUI ONCE in callback, so that it will only load when the plugin is started
+        if self.first_start == True:
+            self.first_start = False
+            self.dock = qIsovalDock()
+            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.dock)
+        self.initDock()
+
+    def initDock(self):
+        """Dock widget init"""
+
+        # btnLaunch action
+        self.dock.btnLaunch.clicked.connect(
+            self.btnLaunchAction)
+
+    def btnLaunchAction(self):
+        """btnLaunch action"""
+
+        # Paramètres du web service IGN de calcul d'isochrone
+        x = 2.424626
+        y = 48.845793
+        location = '{},{}'.format(x, y)
+        method = 'time'  # time distance
+        graphname = 'Voiture'  # Voiture Pieton
+        time = 90 * 60  # si method time
+        distance = 100000 # si method distance
+        holes = False  # True False
+        smoothing = True  # True False
+        epsg = 4326
+        apiKey = 'choisirgeoportail'
+
+        # Paramètres de symbologie
+        fillRed = QColor(251, 154, 153)
+        fillBlue = QColor(166, 206, 227)
+        fillGreen = QColor(178, 223, 138)
+        fillColor = fillGreen
+        strokeRed = QColor(251, 154, 153)
+        strokeBlue = QColor(31, 120, 180)
+        strokeGreen = QColor(51, 160, 44)
+        strokeColor = strokeGreen
+        borderWidth = 0.4
+        opacity = 0.7
+
+        # url du service de calcul
+        if method == 'time':
+            param = 'time={}'.format(time)
+        elif method == 'distance':
+            param = 'distance={}'.format(distance)
+
+        url = '''
+            https://wxs.ign.fr/{}/isochrone/isochrone.xml?location={}&method={}&graphName={}&exclusions=&{}&holes={}&smoothing={}
+        '''.format(apiKey, location, method, graphname, param, holes, smoothing)
+        print(url)
+
+        # Récupération du User-Agent QGIS
+        s = QgsSettings()
+        userAgent = s.value('/qgis/networkAndProxy/userAgent', 'Mozilla/5.0')
+        headers = {'User-Agent': userAgent}
+
+        # Appel du service
+        #xmlResponse = requests.get(url, timeout=10)
+        xmlResponse = requests.get(url, headers=headers)
+        print(xmlResponse)
+
+        # Décodage de la réponse et récupération de la géométrie
+        root = ElementTree.fromstring(xmlResponse.content)
+        wktGeometry = root.find('wktGeometry')
+        #print(wktGeometry.text)
+        if wktGeometry is not None:
+
+            # Construction de la requête sql
+            sql = '''
+                select st_geomfromtext('{}', {}) geom
+            '''.format(wktGeometry.text, epsg)
+            #print(sql)
+
+            # Construction de la couche virtuelle
+            if method == 'time':
+                libLayer = '{}_{}_minutes'.format(graphname, int(time / 60))
+            elif method == 'distance':
+                libLayer = '{}_{}_kilometres'.format(graphname, int(distance / 1000))
+            vLayer = QgsVectorLayer('?query={}'.format(sql), libLayer, 'virtual')
+            #symbol = QgsFillSymbol()
+            #symbol.setColor(fillColor)
+            symbolLayer = QgsSimpleFillSymbolLayer()
+            symbolLayer.setStrokeWidth(borderWidth)
+            symbolLayer.setStrokeColor(strokeColor)
+            symbolLayer.setFillColor(fillColor)
+            vLayer.renderer().symbols(
+                QgsRenderContext())[0].changeSymbolLayer(0, symbolLayer)
+            vLayer.setOpacity(opacity)  # Pour essai
+            QgsProject.instance().addMapLayer(vLayer)
+
+        else:
+            print('Échec de l\'appel du service')
 
 
     def unload(self):
@@ -183,14 +284,23 @@ class qisoval:
     def run(self):
         """Run method that performs all the real work"""
 
+        """
         # Create the dialog with elements (after translation) and keep reference
         # Only create GUI ONCE in callback, so that it will only load when the plugin is started
         if self.first_start == True:
             self.first_start = False
-            self.dlg = qisovalDialog()
+            self.dock = qIsovalDock()
+            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+        """
 
+        if self.dock.isVisible():
+            self.dock.hide()
+        else:
+            self.dock.show()
+
+        """
         # show the dialog
-        self.dlg.show()
+        self.dock.show()
         # Run the dialog event loop
         result = self.dlg.exec_()
         # See if OK was pressed
@@ -198,3 +308,4 @@ class qisoval:
             # Do something useful here - delete the line containing pass and
             # substitute with your code.
             pass
+        """
